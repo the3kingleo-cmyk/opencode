@@ -254,13 +254,35 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
           return data.version
         }
 
-        const response = yield* httpOk.execute(
-          HttpClientRequest.get("https://api.github.com/repos/anomalyco/opencode/releases/latest").pipe(
+        // GitHub's unauthenticated releases API shares a small per-IP budget and
+        // frequently 403s. Send a proper User-Agent, honor GITHUB_TOKEN when set,
+        // and fall back to the npm registry (which mirrors every release with far
+        // higher limits) so version checks never hard-fail the upgrade flow.
+        const githubLatest = Effect.gen(function* () {
+          const base = HttpClientRequest.get(
+            "https://api.github.com/repos/anomalyco/opencode/releases/latest",
+          ).pipe(
             HttpClientRequest.acceptJson,
-          ),
-        )
-        const data = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(response)
-        return data.tag_name.replace(/^v/, "")
+            HttpClientRequest.setHeader("User-Agent", USER_AGENT),
+          )
+          const token = process.env.GITHUB_TOKEN
+          const request = token ? HttpClientRequest.setHeader(base, "Authorization", `Bearer ${token}`) : base
+          const response = yield* httpOk.execute(request)
+          const data = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(response)
+          return data.tag_name.replace(/^v/, "")
+        })
+
+        const npmFallback = Effect.gen(function* () {
+          const response = yield* httpOk.execute(
+            HttpClientRequest.get(
+              `${yield* NpmConfig.registry(process.cwd())}/opencode-ai/${InstallationChannel}`,
+            ).pipe(HttpClientRequest.acceptJson),
+          )
+          const data = yield* HttpClientResponse.schemaBodyJson(NpmPackage)(response)
+          return data.version
+        })
+
+        return yield* githubLatest.pipe(Effect.orElse(() => npmFallback))
       }, Effect.orDie),
       upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
         let upgradeResult: { code: number; stdout: string; stderr: string } | undefined

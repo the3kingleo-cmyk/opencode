@@ -31,14 +31,20 @@ export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for se
 export const RETRY_MAX_RETRIES = 5
 
 const RETRYABLE_MESSAGE_PATTERNS = [
-  /429|500|502|503|504|524/i,
-  /rate increased too quickly|rate limit|rate-limit|rate_limit|too many requests/i,
+  /429|408|500|502|503|504|524/i,
+  /rate increased too quickly|rate limit|rate-limit|rate_limit|too many requests|too_many_requests/i,
+  /quota|quota exceeded|exceeded(?: your)? (?:current )?quota|quota exceeded for metric/i,
   /overloaded|service unavailable|service_unavailable|service-unavailable|internal error|internal_error|internal server error|server error|server_error|server-error|provider returned error|provider_returned_error|provider-returned-error/i,
   /terminated|fetch failed|failed to fetch|network[-_\s]error|upstream connect|connection error|connection refused|connection lost|socket connection was closed|socket hang up|reset before headers|getaddrinfo|enotfound|eai_again|econnrefused|econnreset|etimedout/i,
   /^timeout$|\b(?:request|response|connection|network|stream|read) (?:timeout|timed out|time out)\b/i,
   /try your request again|retry your request|resource exhausted|resource_exhausted/i,
-  /\btry again (?:later|in\b)|\b(?:currently|temporarily) at capacity\b/i,
+  /\btry again (?:later|in\b)|retry in\b|\bretry after\b|\b(?:currently|temporarily) at capacity\b/i,
 ]
+
+// Providers like Gemini return the backoff in the error body instead of a
+// Retry-After header: "Please retry in 38.601658672s."
+const RETRY_IN_TEXT_PATTERN = /\bretry in\s+(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds)?\b/i
+const RETRY_AFTER_TEXT_PATTERN = /\bretry after\s+(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds)\b/i
 
 function cap(ms: number) {
   return Math.min(ms, RETRY_MAX_DELAY)
@@ -69,12 +75,31 @@ export function delay(attempt: number, error?: SessionV1.APIError, random = Math
           return cap(Math.ceil(parsed))
         }
       }
-
-      return cap(exponential(attempt, random))
     }
+
+    // Some providers (e.g. Gemini) omit the header and inline the backoff in the
+    // error body: "Please retry in 38.601658672s." Honor that when present.
+    const fromBody = numFromRetryText(error.data.message) ?? numFromRetryText(error.data.responseBody)
+    if (fromBody !== undefined) {
+      return cap(Math.ceil(fromBody * 1000))
+    }
+
+    if (headers) return cap(exponential(attempt, random))
   }
 
   return cap(Math.min(exponential(attempt, random), RETRY_MAX_DELAY_NO_HEADERS))
+}
+
+function numFromRetryText(value: unknown) {
+  if (typeof value !== "string") return undefined
+  for (const pattern of [RETRY_IN_TEXT_PATTERN, RETRY_AFTER_TEXT_PATTERN]) {
+    const match = value.match(pattern)
+    if (match) {
+      const parsed = Number.parseFloat(match[1]!)
+      if (!Number.isNaN(parsed) && parsed > 0) return parsed
+    }
+  }
+  return undefined
 }
 
 function exponential(attempt: number, random: number) {

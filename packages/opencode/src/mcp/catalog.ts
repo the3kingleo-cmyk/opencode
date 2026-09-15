@@ -40,10 +40,13 @@ export function defs(client: Client, timeout?: number) {
 }
 
 export function convertTool(mcpTool: MCPToolDef, client: Client, timeout?: number): Tool {
+  // inputSchema is optional per the MCP spec; guard against servers that omit it
+  // instead of throwing on `.properties` of undefined.
+  const rawSchema = mcpTool.inputSchema as JSONSchema7 | undefined
   const inputSchema: JSONSchema7 = {
-    ...(mcpTool.inputSchema as JSONSchema7),
+    ...(rawSchema ?? {}),
     type: "object",
-    properties: (mcpTool.inputSchema.properties ?? {}) as JSONSchema7["properties"],
+    properties: rawSchema?.properties ?? {},
     additionalProperties: false,
   }
 
@@ -104,10 +107,14 @@ export function fetch<T extends { name: string }>(
       // Escape both the separator and escape marker so `server:uri` keys remain unambiguous.
       const resourceClient = clientName.replaceAll("%", "%25").replaceAll(":", "%3A")
       return Object.fromEntries(
-        items.map((item) => [
-          key ? resourceClient + ":" + key(item) : sanitizedClient + ":" + sanitize(item.name),
-          { ...item, client: clientName },
-        ]),
+        items
+          // Malformed servers may return entries without a name; skip them instead of
+          // producing colliding empty keys or null-pointer crashes downstream.
+          .filter((item) => typeof item.name === "string" && item.name.length > 0)
+          .map((item) => [
+            key ? resourceClient + ":" + key(item) : sanitizedClient + ":" + sanitize(item.name),
+            { ...item, client: clientName },
+          ]),
       )
     }),
     Effect.orElseSucceed(() => undefined),
