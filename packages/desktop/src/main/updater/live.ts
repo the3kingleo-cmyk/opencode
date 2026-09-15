@@ -26,6 +26,17 @@ export const layer = Layer.effect(
       currentVersion: desktop.version,
       platform,
       prepareToRestart: lifecycle.prepareToRestart,
+      confirmExternalInstall: (version) =>
+        promise(() =>
+          dialog.showMessageBox({
+            type: "info",
+            message: nativeT("desktop.updater.dialog.downloadRequired.message", { version }),
+            title: nativeT("desktop.updater.dialog.downloadRequired.title"),
+            buttons: [nativeT("desktop.updater.dialog.download"), nativeT("desktop.updater.dialog.later")],
+            defaultId: 0,
+            cancelId: 1,
+          }),
+        ).pipe(Effect.map((response) => response.response === 0)),
       persistence: {
         get: Effect.sync(() => {
           const value = desktop.updaterStore.get(key)
@@ -66,17 +77,7 @@ const show = Effect.fn("Updater.show")(function* (
     return
   }
   if (state.status === "download-required") {
-    const response = yield* promise(() =>
-      dialog.showMessageBox({
-        type: "info",
-        message: nativeT("desktop.updater.dialog.downloadRequired.message", { version: state.version }),
-        title: nativeT("desktop.updater.dialog.downloadRequired.title"),
-        buttons: [nativeT("desktop.updater.dialog.download"), nativeT("desktop.updater.dialog.later")],
-        defaultId: 0,
-        cancelId: 1,
-      }),
-    )
-    if (response.response === 0) yield* install
+    yield* install
     return
   }
   if (state.status !== "ready") return

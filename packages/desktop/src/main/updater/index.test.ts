@@ -18,6 +18,7 @@ function setup(input?: {
   stage?: () => Promise<void>
   install?: () => Promise<never>
   external?: boolean
+  confirm?: () => Promise<boolean>
   open?: () => Promise<void>
 }) {
   const calls: string[] = []
@@ -59,6 +60,11 @@ function setup(input?: {
     prepareToRestart: Effect.sync(() => {
       calls.push("prepare")
     }),
+    confirmExternalInstall: (version) =>
+      Effect.tryPromise(async () => {
+        calls.push(`confirm:${version}`)
+        return (await input?.confirm?.()) ?? true
+      }),
     persistence: {
       get: Effect.sync(() => ready),
       set: (value) =>
@@ -104,7 +110,17 @@ describe("updater", () => {
     expect(app.getReady()).toBeUndefined()
 
     await app.updater.install()
-    expect(app.calls).toEqual(["check", "check", "external:https://files.test/2.0.0.dmg"])
+    expect(app.calls).toEqual(["check", "check", "confirm:2.0.0", "external:https://files.test/2.0.0.dmg"])
+    expect(await app.updater.getState()).toEqual({ status: "download-required", version: "2.0.0" })
+  })
+
+  test("keeps the external installer closed until the user confirms the download", async () => {
+    const app = setup({ external: true, confirm: () => Promise.resolve(false) })
+    await app.updater.start()
+
+    await app.updater.install()
+
+    expect(app.calls).toEqual(["check", "check", "confirm:2.0.0"])
     expect(await app.updater.getState()).toEqual({ status: "download-required", version: "2.0.0" })
   })
 
@@ -145,7 +161,7 @@ describe("updater", () => {
     const second = app.updater.install()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(app.calls).toEqual(["check", "check", "external:https://files.test/2.0.0.dmg"])
+    expect(app.calls).toEqual(["check", "check", "confirm:2.0.0", "external:https://files.test/2.0.0.dmg"])
     release()
     await Promise.all([first, second])
     expect(await app.updater.getState()).toEqual({ status: "download-required", version: "2.0.0" })

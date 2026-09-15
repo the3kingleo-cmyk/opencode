@@ -22,6 +22,7 @@ export type Dependencies = {
   readonly currentVersion: string
   readonly platform?: Platform
   readonly prepareToRestart: Effect.Effect<void, unknown>
+  readonly confirmExternalInstall: (version: string) => Effect.Effect<boolean, unknown>
   readonly persistence: {
     readonly get: Effect.Effect<{ version: string } | undefined, unknown>
     readonly set: (value: { version: string }) => Effect.Effect<void, unknown>
@@ -173,6 +174,7 @@ export const make = Effect.fn("Updater.make")(function* (dependencies: Dependenc
         yield* pending ? Deferred.await(pending) : refreshExternal(platform)
         if (!target || target.mode !== "external" || !platform.externalInstall)
           return yield* Effect.fail(new Error("External installer is unavailable"))
+        if (!(yield* dependencies.confirmExternalInstall(target.version))) return yield* Effect.void
         transition({ status: "installing", version: target.version })
         return yield* platform.externalInstall(target.url)
       }).pipe(
