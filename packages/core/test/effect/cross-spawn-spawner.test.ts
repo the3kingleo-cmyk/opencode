@@ -285,6 +285,29 @@ describe("cross-spawn spawner", () => {
         expect(running).toBe(false)
       }),
     )
+
+    fx.effect(
+      "exitCode resolves as soon as the process exits, even if a grandchild holds its stdio open",
+      Effect.gen(function* () {
+        if (process.platform === "win32") return
+        // Regression test: a child that spawns a longer-lived grandchild
+        // inheriting the same stdio, then exits itself. exitCode must reflect
+        // the child's own termination promptly instead of waiting for the
+        // shared stdio to fully close (which only happens once the
+        // grandchild also exits, ~1500ms later).
+        const started = Date.now()
+        const handle = yield* js(
+          [
+            "const { spawn } = require('child_process')",
+            "spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 1500)'], { stdio: 'inherit' }).unref()",
+            "setTimeout(() => process.exit(0), 20)",
+          ].join("\n"),
+        )
+        const code = yield* handle.exitCode
+        expect(code).toBe(ChildProcessSpawner.ExitCode(0))
+        expect(Date.now() - started).toBeLessThan(1_000)
+      }),
+    )
   })
 
   describe("error handling", () => {

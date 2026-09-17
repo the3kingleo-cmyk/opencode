@@ -275,6 +275,14 @@ export const make = Effect.gen(function* () {
       })
       proc.on("exit", (...args) => {
         exit = args
+        // Resolve as soon as the process itself has terminated. Waiting for
+        // "close" alone can hang forever: "close" only fires once stdio is
+        // fully drained, and stdio stays open if a grandchild process
+        // (e.g. a detached dev server spawned by this child) inherited the
+        // same file descriptors and outlives this process.
+        if (end) return
+        end = true
+        Deferred.doneUnsafe(signal, Exit.succeed(args))
       })
       proc.on("close", (...args) => {
         if (end) return
